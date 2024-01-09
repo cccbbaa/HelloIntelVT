@@ -996,7 +996,19 @@ void VTStop()
         return;
     }
 
-    DoVmCall('czvt', 'vm', 'off', (cpuNumber + 1ULL));
+    if (vmState[cpuNumber].bVMLAUNCHSuccess == FALSE) {
+        __vmx_off();
+
+        _CR4 cr4Value = { 0 };
+        cr4Value.Value = __readcr4();
+
+        cr4Value.VMXE = 0;
+        __writecr4(cr4Value.Value); // ÐÞ¸ÄCR4µÄVMXEÎ»
+
+    }
+    else {
+        DoVmCall('czvt', 'vm', 'off', (cpuNumber + 1ULL));
+    }
 
     _CR4 cr4Value = { 0 };
     cr4Value.Value = __readcr4();
