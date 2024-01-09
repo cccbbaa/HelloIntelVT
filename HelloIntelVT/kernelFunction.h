@@ -24,8 +24,11 @@ extern UINT64 getGDTbase(void);
 extern UINT64 getIDTbase(void);
 extern void SetBreakPointEx(void);
 extern void Vmx_VmResume(void);
-extern void DoVmCall(void);
+extern void DoVmCall(unsigned long long param1, unsigned long long param2, unsigned long long param3, unsigned long long param4);
 extern void AsmCreateVMM(void);
 // 超时单位为CPU时钟周期，比如3GHz的CPU单位就是0.33纳秒
 // 设置为0即为不会超时
 extern int spinlock(int* lockvar, unsigned long long timeout); 
+
+extern void reloadIdtr(void* GdtBase, unsigned long GdtLimit);
+extern void reloadGdtr(void* GdtBase, unsigned long GdtLimit);

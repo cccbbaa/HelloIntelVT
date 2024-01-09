@@ -1,14 +1,17 @@
 #include "vmhandler.h"
 #include "vmWriteReadHelper.h"
-#include "HelpStruct.h"
+
 #include "HelpFunction.h"
 #include "msrname.h"
+#include "VTFunction.h"
+
+Register restoreRegister[MAX_CPU_COUNT] = { 0 };
 
 static void VMMcpuidHandler(PGUEST_REGS GuestRegs)
 {
-	if (GuestRegs->rax == 'CZVT')
+	if (GuestRegs->rax == 'cpur')
 	{
-		GuestRegs->rbx = 0x88888888;
+		GuestRegs->rbx = cpunr();
 		GuestRegs->rcx = 0x12345678;
 		GuestRegs->rdx = 0x22334455;
 		return;
@@ -145,6 +148,136 @@ static void VMMxsetbvHandler(PGUEST_REGS GuestRegs)
 	_xsetbv(ext_ctrl_reg, Val.QuadPart);
 }
 
+static void VMMvmcallHandler(PGUEST_REGS GuestRegs)
+{
+	// rcx 'czvt'
+	// rdx 'vm'
+	// r8 'off'
+	// r9 cpunr() + 1
+
+	UINT64 result = ((GuestRegs->rcx * GuestRegs->r8) ^ GuestRegs->rdx) + (GuestRegs->r9);
+
+	//获取当前逻辑处理器ID
+	ULONG64 ProcessID = cpunr();
+
+	if (result == (0x2b49e3ca491c55ULL + (cpunr() + 1ULL))) // vmoff
+	{
+
+		//获取GUEST CR3 设置成当前CR3
+		ULONG64 GuestCr3 = 0;
+		__vmx_vmread(vm_guest_cr3, &GuestCr3);
+		__writecr3(GuestCr3);
+
+		//获取GUESTRSP和GUESTRIP 
+		ULONG64 ExitInstructionLength = 0;
+		__vmx_vmread(vm_guest_rip, &restoreRegister[ProcessID].rip);
+		__vmx_vmread(vm_guest_rsp, &restoreRegister[ProcessID].rsp);
+		__vmx_vmread(vm_guest_rflags, &restoreRegister[ProcessID].rflags);
+		__vmx_vmread(vm_exit_instructionlength, &ExitInstructionLength);
+		restoreRegister[ProcessID].rip += ExitInstructionLength;
+		
+		// 获取通用寄存器
+		{
+			restoreRegister[ProcessID].rcx = GuestRegs->rcx;
+			restoreRegister[ProcessID].rdx = GuestRegs->rdx;
+			restoreRegister[ProcessID].rbx = GuestRegs->rbx;
+			restoreRegister[ProcessID].rbp = GuestRegs->rbp;
+			restoreRegister[ProcessID].rsi = GuestRegs->rsi;
+			restoreRegister[ProcessID].rdi = GuestRegs->rdi;
+			restoreRegister[ProcessID].r8 = GuestRegs->r8;
+			restoreRegister[ProcessID].r9 = GuestRegs->r9;
+			restoreRegister[ProcessID].r10 = GuestRegs->r10;
+			restoreRegister[ProcessID].r11 = GuestRegs->r11;
+			restoreRegister[ProcessID].r12 = GuestRegs->r12;
+			restoreRegister[ProcessID].r13 = GuestRegs->r13;
+			restoreRegister[ProcessID].r14 = GuestRegs->r14;
+			restoreRegister[ProcessID].r15 = GuestRegs->r15;
+		}
+
+		//获取GUEST里FS GS CS DS ES IDT GDT 寄存器 并赋值给当前host  
+		{
+			ULONG64 FsBase = 0;
+			__vmx_vmread(vm_guest_fs_base, &FsBase);
+			__writemsr(IA32_FS_BASE_MSR, FsBase);
+
+			ULONG64 Fs = 0;
+			__vmx_vmread(vm_guest_fs, &Fs);
+			restoreRegister[ProcessID].fs = Fs & 0xffff;
+		}
+		
+		{
+			ULONG64 gsBase = 0;
+			__vmx_vmread(vm_guest_gs_base, &gsBase);
+			__writemsr(IA32_GS_BASE_MSR, gsBase);
+
+			ULONG64 gs = 0;
+			__vmx_vmread(vm_guest_fs, &gs);
+			restoreRegister[ProcessID].gs = gs & 0xffff;
+		}
+
+		{
+
+			ULONG64 cs = 0;
+			__vmx_vmread(vm_guest_cs, &cs);
+			restoreRegister[ProcessID].cs = cs & 0xffff;
+		}
+
+		{
+
+			ULONG64 ds = 0;
+			__vmx_vmread(vm_guest_ds, &ds);
+			restoreRegister[ProcessID].ds = ds & 0xffff;
+		}
+
+		{
+
+			ULONG64 ss = 0;
+			__vmx_vmread(vm_guest_ss, &ss);
+			restoreRegister[ProcessID].ss = ss & 0xffff;
+		}
+
+		{
+
+			ULONG64 es = 0;
+			__vmx_vmread(vm_guest_es, &es);
+			restoreRegister[ProcessID].es = es & 0xffff;
+		}
+
+		ULONG64 IdtBase, Idtlimit;
+		__vmx_vmread(vm_guest_idtr_base, &IdtBase);
+		__vmx_vmread(vm_guest_idt_limit, &Idtlimit);
+		reloadIdtr((PVOID)IdtBase, Idtlimit & 0xffffffff);
+		
+		ULONG64 GdtBase, GdtLimit;
+		__vmx_vmread(vm_guest_gdtr_base, &GdtBase);
+		__vmx_vmread(vm_guest_gdt_limit, &GdtLimit);
+		reloadGdtr((PVOID)GdtBase, GdtLimit & 0xffffffff);
+
+		//调用VmxClear 并关闭虚拟机
+
+		UCHAR Result = __vmx_vmclear(&(vmState[ProcessID].pVMCSRegion_PA));
+
+		//清理成功就调用VmOff并设置标志位
+		if (Result == 0)
+		{
+			__vmx_off();
+
+			vmState[ProcessID].bVMLAUNCHSuccess = FALSE;
+			vmState[ProcessID].bVMXONSuccess = FALSE;
+
+			//恢复Cr4
+			CR4 Cr4 = { 0 };
+			Cr4.AsUInt = __readcr4();
+			Cr4.VmxEnable = 0;
+			__writecr4(Cr4.AsUInt);
+
+		}
+	}
+
+	restoreRegister[ProcessID].rax = STATUS_SUCCESS;
+
+}
+
 void VmxVmresume()
 {
 	__vmx_vmresume();
@@ -159,7 +292,7 @@ void VmxVmresume()
 	__debugbreak();
 }
 
-BOOL CVMMEntryPoint(PGUEST_REGS pGuestRegs)
+PVOID CVMMEntryPoint(PGUEST_REGS pGuestRegs)
 {
 	// SetBreakPointEx();
 
@@ -235,9 +368,8 @@ BOOL CVMMEntryPoint(PGUEST_REGS pGuestRegs)
 	
 	case 18: // VMCALL
 	{
-		pGuestRegs->rax = STATUS_SUCCESS;
-		DbgPrintEx(0, 0, "vm_exit_reason: 0x%llx\nvm_exit_instructionlength: %lld\nvm_guest_rsp: 0x%llx\nvm_guest_rip: 0x%llx\nvm_guest_rflags: 0x%llx\n", ExitReason, ExitInstructionLength, GuestRsp, GuestRip, GuestRflags);
-		SetBreakPointEx();
+		VMMvmcallHandler(pGuestRegs);
+		
 	}
 		break;
 	case 28: // CR access
@@ -280,6 +412,11 @@ BOOL CVMMEntryPoint(PGUEST_REGS pGuestRegs)
 	}
 		break;
 	}
+
+	if (vmState[cpunr()].bVMXONSuccess == FALSE) {
+		return &restoreRegister[cpunr()];
+	}
+
 	// DbgPrintEx(0, 0, "------Test------\nvm_exit_reason: 0x%llx\nvm_exit_instructionlength: %lld\nvm_guest_rsp: 0x%llx\nvm_guest_rip: 0x%llx\nvm_guest_rflags: 0x%llx\n------Test------\n", ExitReason, ExitInstructionLength, GuestRsp, GuestRip, GuestRflags);
 	// SetBreakPointEx();
 	GuestRip += ExitInstructionLength;
@@ -299,5 +436,7 @@ BOOL CVMMEntryPoint(PGUEST_REGS pGuestRegs)
 		SetBreakPointEx();
 	}
 
-	return TRUE;
+	
+
+	return 0;
 }

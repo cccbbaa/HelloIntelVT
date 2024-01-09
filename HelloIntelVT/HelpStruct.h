@@ -400,6 +400,39 @@ typedef struct _GUEST_REGS
 #pragma pack(pop)
 
 #pragma pack(push, 1)
+typedef struct _REGISGER
+{
+    ULONG64 rax; // 0x00
+    ULONG64 rcx; // 0x08
+    ULONG64 rdx; // 0x10
+    ULONG64 rbx; // 0x18
+    ULONG64 rsp; // 0x20
+    ULONG64 rbp; // 0x28
+    ULONG64 rsi; // 0x30
+    ULONG64 rdi; // 0x38
+    ULONG64 r8;  // 0x40
+    ULONG64 r9;  // 0x48
+    ULONG64 r10; // 0x50
+    ULONG64 r11; // 0x58
+    ULONG64 r12; // 0x60
+    ULONG64 r13; // 0x68
+    ULONG64 r14; // 0x70
+    ULONG64 r15; // 0x78
+
+    ULONG64 rflags;
+    ULONG64 rip;
+
+    WORD cs;
+    WORD ds;
+    WORD es;
+    WORD fs;
+    WORD gs;
+    WORD ss;
+
+} Register, * pRegister;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
 typedef union
 {
     struct

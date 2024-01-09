@@ -1,5 +1,6 @@
 #pragma once
 #include "kernelFunction.h"
+#include "vmcsStruct.h"
 
 #define VM_STACK_SIZE   24 * 1024
 #define MAX_CPU_COUNT	64
@@ -48,6 +49,8 @@ typedef union
 		unsigned Reserved_64:32;
 	};
 }_CR4;
+
+extern VMState vmState[MAX_CPU_COUNT];
 
 // should called by VTStart
 BOOL CheckVTIsSupport();
