@@ -1,9 +1,10 @@
 #pragma once
 #include "kernelFunction.h"
+#include "HelpStruct.h"
 
 extern void VMMEntryPoint();
 extern void AsmVmxResState();
 
 void VmxVmresume();
 
-BOOL CVMMEntryPoint(PVOID pStack);
+PVOID CVMMEntryPoint(PGUEST_REGS pGuestRegs);

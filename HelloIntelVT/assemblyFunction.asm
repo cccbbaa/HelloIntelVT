@@ -197,6 +197,28 @@ getIDTbase:
 	int 3
 	int 3
 
+PUBLIC reloadIdtr
+reloadIdtr PROC
+	push	rcx
+	shl		rdx, 48
+	push	rdx
+	lidt	fword ptr [rsp+6]
+	pop		rax
+	pop		rax
+	ret
+reloadIdtr ENDP
+
+PUBLIC reloadGdtr
+reloadGdtr PROC
+	push	rcx
+	shl		rdx, 48
+	push	rdx
+	lgdt	fword ptr [rsp+6]	; do not try to modify stack selector with this ;)
+	pop		rax
+	pop		rax
+	ret
+reloadGdtr ENDP
+
 PUBLIC SetBreakPointEx
 SetBreakPointEx:
 	int 3

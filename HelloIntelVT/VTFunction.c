@@ -2,7 +2,6 @@
 #include "HelpFunction.h"
 #include "vmhelper.h"
 #include "msrname.h"
-#include "vmcsStruct.h"
 #include "vmhandler.h"
 
 VMState vmState[MAX_CPU_COUNT] = { 0 };
@@ -933,7 +932,7 @@ static BOOL AllocCurrentVMXONmemory(int cpuNumber)
 BOOL VTStart()
 {
     int cpuNumber = cpunr();
-
+    
     AllocCurrentVMXONmemory(cpuNumber);
 
     if (CheckVTIsSupport() == FALSE) {
@@ -997,30 +996,16 @@ void VTStop()
         return;
     }
 
+    DoVmCall('czvt', 'vm', 'off', (cpuNumber + 1ULL));
+
     _CR4 cr4Value = { 0 };
     cr4Value.Value = __readcr4();
-    if (cr4Value.VMXE == 0) {
-        DbgPrintEx(0, 0, "CPUNumber: %d not execute VMXON yet\n", cpunr());
-        return;
-    }
-
-    __vmx_vmclear(&vmState[cpuNumber].pVMCSRegion_PA);
-    __vmx_off();
-
+    if (cr4Value.VMXE == 0) 
     {
-        _CR4 cr4Value = { 0 };
-        cr4Value.Value = __readcr4();
-
-        cr4Value.VMXE = 0;
-        __writecr4(cr4Value.Value); // ÐÞ¸ÄCR4µÄVMXEÎ»
+        if (MmIsAddressValid(vmState[cpuNumber].pVMXRegion)) 
+        {
+            ExFreePoolWithTag(vmState[cpuNumber].pVMXRegion, VMMemoryTag);
+            vmState[cpuNumber].pVMXRegion = NULL;
+        }
     }
-
-    vmState[cpuNumber].pVMXRegion_PA.QuadPart = 0;
-    if (MmIsAddressValid(vmState[cpuNumber].pVMXRegion)) {
-        ExFreePoolWithTag(vmState[cpuNumber].pVMXRegion, VMMemoryTag);
-        vmState[cpuNumber].pVMXRegion = NULL;
-    }
-
-    vmState[cpuNumber].bVMXONSuccess = FALSE;
-    //DbgPrintEx(0, 0, "VMXOFF at CPUNumber: %d\n", cpunr());
 }
