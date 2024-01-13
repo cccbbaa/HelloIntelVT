@@ -5,7 +5,9 @@
 #include "vmhandler.h"
 
 VMState vmState[MAX_CPU_COUNT] = { 0 };
-CriticalSection cSection = { 0 };
+CriticalSection cVTStartSection = { 0 };
+EPT_STATE eptState = { 0 };
+PBYTE EptMem = NULL64;
 
 BOOL CheckVTIsSupport()
 {
@@ -90,7 +92,7 @@ static BOOL AllocVMMmemory(int cpuNumber)
 
 BOOL CreateVirtualMachine(UINT64 guestStack)
 {
-    EnterCriticalSection(&cSection, 0);
+    EnterCriticalSection(&cVTStartSection, 0);
 
     int cpuNumber = cpunr();
 
@@ -153,7 +155,7 @@ BOOL CreateVirtualMachine(UINT64 guestStack)
 
     vmState[cpuNumber].bVMLAUNCHSuccess = TRUE;
 
-    LeaveCriticalSection(&cSection);
+    LeaveCriticalSection(&cVTStartSection);
 
     // 虚拟机，启动!!! 
     
@@ -613,18 +615,40 @@ BOOL InitializeVMCS(int cpuNumber, UINT64 guestStack)
         {
             SecondaryProcessorBasedVMEC spbVMEC = { 0 };
             spbVMEC.Value = 0;
+            
+            if (eptState.bEptInitializeSuccess) {
+                spbVMEC.EnableEPT = 1;
+                spbVMEC.EnableVPID = 1;
+            }
+                
             spbVMEC.EnableRDTSCP = 1;
             spbVMEC.EnableXSAVESXRSTORS = 1;
-            /*spbVMEC.EnableVPID = 1;
             spbVMEC.EnableINVPCID = 1;
             spbVMEC.EnableUserWaitAndPause = 1;
-            spbVMEC.EnablePCONFIG = 1;*/
+            spbVMEC.EnablePCONFIG = 1;
 
             spbVMEC.Value = VmxAdjustControls(spbVMEC.Value, IA32_VMX_PROCBASED_CTLS2_MSR);
             
             Ret = __vmx_vmwrite(vm_execution_controls_cpu_secondary, spbVMEC.Value);
             if (Ret != 0) {
                 goto InitVMCSfailed;
+            }
+
+            if (eptState.bEptInitializeSuccess) {
+                // Intel System Programming Guide 25.6.11
+                Ret = __vmx_vmwrite(vm_eptpointer, eptState.EptPointer.AsUInt);
+                if (Ret != 0) {
+                    goto InitVMCSfailed;
+                }
+
+                //对于所有处理器，使用VPID = 1。这允许处理器将EPT结构的缓存与TLB中的常规OS页面转换表分开。
+                Ret = __vmx_vmwrite(vm_vpid, 1);
+                if (Ret != 0) {
+                    goto InitVMCSfailed;
+                }
+
+                DbgPrintEx(0, 0, "this cpu support ept\n");
+
             }
         }
     }
@@ -871,8 +895,168 @@ BOOL RemoveAllVM()
     return TRUE;
 }
 
+static void EptSetPde2mEntry(PVOID NewEntry)
+{
+    EPT_PDE_2MB* pPDEEntry = (EPT_PDE_2MB*)NewEntry;
+
+
+    //获取Mtrrs信息
+    IA32_MTRR_CAPABILITIES_REGISTER MtrrCapReg = { 0 };
+    MtrrCapReg.AsUInt = __readmsr(IA32_MTRR_CAPABILITIES);
+    ULONG64 MtrrRangeSize = sizeof(MTRR_RANGE) * MtrrCapReg.VariableRangeCount;
+    PMTRR_RANGE pMtrrRange = (PMTRR_RANGE)ExAllocatePoolWithTag(NonPagedPool, MtrrRangeSize, 'st');
+    if (pMtrrRange == NULL) return;
+
+    IA32_MTRR_PHYSBASE_REGISTER MtrrBase = { 0 };
+    IA32_MTRR_PHYSMASK_REGISTER MtrrMask = { 0 };
+    ULONG NumberOfBitsInMask = 0;
+    for (size_t i = 0; i < MtrrCapReg.VariableRangeCount; i++)
+    {
+        MtrrBase.AsUInt = __readmsr(IA32_MTRR_PHYSBASE0 + (i * 2));
+        MtrrMask.AsUInt = __readmsr(IA32_MTRR_PHYSMASK0 + (i * 2));
+
+        pMtrrRange[i].Valid = MtrrMask.Valid;
+        pMtrrRange[i].Type = MtrrBase.Type;
+
+        if (MtrrMask.Valid)
+        {
+            pMtrrRange[i].PhysicalAddressMin = MtrrBase.PageFrameNumber * PAGE_SIZE;
+            BitScanForward64(&NumberOfBitsInMask, MtrrMask.PageFrameNumber * PAGE_SIZE);
+            pMtrrRange[i].PhysicalAddressMax = pMtrrRange[i].PhysicalAddressMin + ((1ull << NumberOfBitsInMask) - 1);
+        }
+    }
+
+    //获取大页面地址
+    ULONG64 LargePageAddress = pPDEEntry->PageFrameNumber * SIZE_2M;
+
+    //设置默认属性为WB
+    ULONG64 MemoryType = MEMORY_TYPE_WRITE_BACK;
+
+    //为0的条目设置UC
+    if (LargePageAddress == 0)
+    {
+        MemoryType = MEMORY_TYPE_UNCACHEABLE;
+    }
+
+    for (size_t i = 0; i < MtrrCapReg.VariableRangeCount; i++)
+    {
+        //UC为最高优先级
+        if (MemoryType == MEMORY_TYPE_UNCACHEABLE) break;
+        //检查是否在可变区域范围
+        if (LargePageAddress < pMtrrRange[i].PhysicalAddressMin) continue;
+        if (LargePageAddress > pMtrrRange[i].PhysicalAddressMax) continue;
+
+        if (MemoryType == MEMORY_TYPE_WRITE_THROUGH || pMtrrRange[i].Type == MEMORY_TYPE_WRITE_THROUGH)
+        {
+            if (MemoryType == MEMORY_TYPE_WRITE_BACK)
+            {
+                MemoryType = MEMORY_TYPE_WRITE_THROUGH;
+            }
+        }
+        else
+        {
+            MemoryType = pMtrrRange[i].Type;
+        }
+    }
+
+    pPDEEntry->MemoryType = MemoryType;
+    ExFreePoolWithTag(pMtrrRange, 'st');
+}
+
+
+
+static BOOL AllocEptPageTable()
+{
+    UINT64 MSR48c = __readmsr(IA32_VMX_EPT_VPID_CAP_MSR);
+
+    // Intel System Programming Guide A.10
+    if (MSR48c & 0x4000) {
+        eptState.EptPointer.MemoryType = MEMORY_TYPE_WRITE_BACK;
+    }
+    else if (MSR48c & 0x100) {
+        eptState.EptPointer.MemoryType = MEMORY_TYPE_UNCACHEABLE;
+    }
+    else {
+        DbgPrintEx(0, 0, "MSR 0x48C 寄存器有问题\n");
+        return FALSE;
+    }
+
+    if ((MSR48c & 0x40) == 0) {
+        DbgPrintEx(0, 0, "current cpu EPT not support page-walk length 4\n");
+        return FALSE;
+    }
+
+    PVMM_EPT_PAGE_TABLE PageTable = NULL;
+    //分配4k对齐内存
+    PHYSICAL_ADDRESS MaxPhy = { 0 };
+    MaxPhy.QuadPart = MAXULONG64;
+    PageTable = (PVMM_EPT_PAGE_TABLE)MmAllocateContiguousMemory(sizeof(VMM_EPT_PAGE_TABLE), MaxPhy);
+    if (PageTable == NULL)
+    {
+        DbgPrintEx(0, 0, "分配VMM_EPT_PAGE_TABLE内存失败\n");
+        return FALSE;
+    }
+
+    RtlZeroMemory(PageTable, sizeof(VMM_EPT_PAGE_TABLE));
+
+    //设置第一个512G区域
+    PageTable->PML4T[0].WriteAccess = 1;
+    PageTable->PML4T[0].ReadAccess = 1;
+    PageTable->PML4T[0].ExecuteAccess = 1;
+    PageTable->PML4T[0].PageFrameNumber = MmGetPhysicalAddress(PageTable->PDPT).QuadPart / PAGE_SIZE;
+
+    //填写1G区域
+    for (size_t i = 0; i < EPT_PDPTE_ENTRY_COUNT; i++)
+    {
+        PageTable->PDPT[i].ReadAccess = 1;
+        PageTable->PDPT[i].WriteAccess = 1;
+        PageTable->PDPT[i].ExecuteAccess = 1;
+        PageTable->PDPT[i].PageFrameNumber = MmGetPhysicalAddress(PageTable->PDT[i]).QuadPart / PAGE_SIZE;
+    }
+
+    //填充2M区域
+    for (size_t i = 0; i < EPT_PDPTE_ENTRY_COUNT; i++)
+    {
+
+        for (size_t j = 0; j < EPT_PDE_ENTRY_COUNT; j++)
+        {
+            PageTable->PDT[i][j].ReadAccess = 1;
+            PageTable->PDT[i][j].WriteAccess = 1;
+            PageTable->PDT[i][j].ExecuteAccess = 1;
+            PageTable->PDT[i][j].LargePage = 1;
+            PageTable->PDT[i][j].PageFrameNumber = (i * EPT_PDPTE_ENTRY_COUNT) + j;
+            //设置2M其他区域
+            EptSetPde2mEntry(&PageTable->PDT[i][j]);
+        }
+    }
+
+    eptState.pEptPageTable = PageTable;
+    
+    eptState.EptPointer.PageWalkLength = 3; // 4级页表(page-walk length 4)
+    eptState.EptPointer.EnableAccessAndDirtyFlags = FALSE;
+    eptState.EptPointer.PageFrameNumber = MmGetPhysicalAddress(eptState.pEptPageTable->PML4T).QuadPart / PAGE_SIZE;
+
+    return TRUE;
+}
+
 BOOL VMXStart()
 {
+    LARGE_INTEGER MSR48b = { 0 };
+    MSR48b.QuadPart = __readmsr(IA32_VMX_PROCBASED_CTLS2_MSR);
+
+    if (((MSR48b.HighPart >> 1) % 2) == 0) {
+        DbgPrintEx(0, 0, "this cpu not support EPT\n");
+    }
+    else {
+        BOOL ret = AllocEptPageTable();
+        if (ret == FALSE) {
+            DbgPrintEx(0, 0, "AllocEptPageTable Failed\n");
+        }
+        else {
+            eptState.bEptInitializeSuccess = TRUE;
+        }
+    }
+
     KeGenericCallDpc(VTStartForCurrentCPU_DPC, NULL);
 
     return TRUE;
@@ -885,6 +1069,10 @@ BOOL VMXStop()
     KeGenericCallDpc(VTStopForCurrentCPU_DPC, NULL);
 
     RemoveAllVM();
+
+    if (eptState.bEptInitializeSuccess) {
+        MmFreeContiguousMemory(eptState.pEptPageTable);
+    }
 
     return TRUE;
 }

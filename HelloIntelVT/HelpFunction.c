@@ -236,3 +236,28 @@ BOOLEAN LeaveCriticalSection(pCriticalSection CS)
 
     return FALSE;
 }
+
+INT GetPhysicalMemoryGigaBytes()
+{
+    PPHYSICAL_MEMORY_RANGE MemoryRanges = MmGetPhysicalMemoryRanges();
+    if (!MemoryRanges)
+    {
+        // DbgPrint("Failed to get physical memory ranges\n");
+        return 0;
+    }
+
+    PHYSICAL_ADDRESS TotalMemory = { 0 };
+    for (PPHYSICAL_MEMORY_RANGE CurrentRange = MemoryRanges; CurrentRange->NumberOfBytes.QuadPart != 0; CurrentRange++)
+    {
+        TotalMemory.QuadPart += CurrentRange->NumberOfBytes.QuadPart;
+    }
+
+    if (TotalMemory.QuadPart == 0) {
+        return 0;
+    }
+
+    ExFreePool(MemoryRanges);
+    UINT result = (TotalMemory.QuadPart % 0x40000000) > 0 ? (TotalMemory.QuadPart / 0x40000000) + 1 : (TotalMemory.QuadPart / 0x40000000);
+
+    return result;
+}

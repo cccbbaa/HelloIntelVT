@@ -9,6 +9,7 @@ Register restoreRegister[MAX_CPU_COUNT] = { 0 };
 
 static void VMMcpuidHandler(PGUEST_REGS GuestRegs)
 {
+
 	if (GuestRegs->rax == 'cpur')
 	{
 		GuestRegs->rbx = cpunr();
@@ -47,6 +48,41 @@ static void VMMwrmsrHandler(PGUEST_REGS GuestRegs)
 	__writemsr(Register, Msr.QuadPart);
 }
 
+static UCHAR VMMinvvpid(UINT32 Type, UINT16 Vpid, UINT64 LinearAddress)
+{
+	UCHAR Result = 0;
+	INVVPID_DESCRIPTOR Descriptor = { 0 };
+	Descriptor.LinearAddress = LinearAddress;
+	Descriptor.Vpid = Vpid;
+
+	switch (Type)
+	{
+	case InvvpidIndividualAddress:
+	{
+		Result = __invvpid(Type, &Descriptor);
+		break;
+	}
+	case InvvpidSingleContext:
+	{
+		Descriptor.LinearAddress = 0;
+		Result = __invvpid(Type, &Descriptor);
+		break;
+	}
+	case InvvpidAllContext:
+	{
+		Result = __invvpid(Type, NULL);
+		break;
+	}
+	case InvvpidSingleContextRetainingGlobals:
+	{
+		Descriptor.LinearAddress = 0;
+		Result = __invvpid(Type, NULL);
+		break;
+	}
+	}
+	return Result;
+}
+
 static void VMMaccessCrHandler(PGUEST_REGS GuestRegs)
 {
 	VMX_EXIT_QUALIFICATION_MOV_CR Qualification = { 0 };
@@ -79,11 +115,12 @@ static void VMMaccessCrHandler(PGUEST_REGS GuestRegs)
 			__vmx_vmwrite(vm_guest_cr3, *RegisterPtr);
 
 			//
-		   // 由于我们使用了VPID标签而失效，因此vm-exit不会正常（自动）刷新tlb，我们必须手动执行
-		   //
+		    // 由于使用了VPID标签而失效，因此vm-exit不会正常（自动）刷新tlb，我们必须手动执行
+		    //
 			// 调用使单个Vpid失效 因为我们设置默认VPID为1了
-			//VmxInvvpid(INVVPID_TYPE::InvvpidSingleContext, 1, NULL);
-			SetBreakPointEx();
+			VMMinvvpid(InvvpidSingleContext, 1, NULL);
+
+			
 			break;
 		}
 		case VMX_EXIT_QUALIFICATION_REGISTER_CR4:

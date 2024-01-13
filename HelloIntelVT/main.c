@@ -23,6 +23,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT pDriver, PUNICODE_STRING pRegPath)
 
 	/*if (VMMCreateForCurrentCPU() == FALSE) {
 		VMXStop();
+		SetBreakPointEx();
 		return STATUS_UNSUCCESSFUL;
 	}*/
 

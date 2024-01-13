@@ -45,10 +45,13 @@ void ConvertGdtEntry(UINT64 GdtBase, UINT16 Selector, PVMX_GDTENTRY64 VmxGdtEntr
 /// set 32-bit value by first 32 bits of readmsr value ANDed, and the last 32 bits ORed 
 /// </summary>
 /// <param name="Ctl">origin value</param>
-/// <param name="Msr">should be 0x481</param>
+/// <param name="Msr"></param>
 /// <returns></returns>
 ULONG VmxAdjustControls(ULONG Ctl, ULONG Msr);
 
 BOOLEAN EnterCriticalSection(pCriticalSection CS, UINT64 TimeOut);
 
 BOOLEAN LeaveCriticalSection(pCriticalSection CS);
+
+// 获取物理内存大小，按GB大小返回(向上取整)
+INT GetPhysicalMemoryGigaBytes();

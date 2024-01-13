@@ -245,5 +245,25 @@ Vmx_VmResume Proc
         ret
 Vmx_VmResume endp
 
+; unsigned char __stdcall AsmInvvpid(
+;     _In_ InvVpidType invvpid_type,
+;     _In_ const InvVpidDescriptor *invvpid_descriptor);
+PUBLIC __invvpid
+__invvpid PROC
+    invvpid rcx, oword ptr [rdx]
+    jz errorWithCode        ; if (ZF) jmp
+    jc errorWithoutCode     ; if (CF) jmp
+    xor rax, rax            ; return VMX_OK
+    ret
+
+errorWithoutCode:
+    mov rax, 1
+    ret
+
+errorWithCode:
+    mov rax, 2
+    ret
+__invvpid ENDP
+
 _TEXT   ENDS
         END
