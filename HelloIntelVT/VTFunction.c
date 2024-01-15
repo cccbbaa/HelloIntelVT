@@ -6,6 +6,7 @@
 
 VMState vmState[MAX_CPU_COUNT] = { 0 };
 CriticalSection cVTStartSection = { 0 };
+
 EPT_STATE eptState = { 0 };
 PBYTE EptMem = NULL64;
 
@@ -963,9 +964,7 @@ static void EptSetPde2mEntry(PVOID NewEntry)
     ExFreePoolWithTag(pMtrrRange, 'st');
 }
 
-
-
-static BOOL AllocEptPageTable()
+static BOOL InitEpt()
 {
     UINT64 MSR48c = __readmsr(IA32_VMX_EPT_VPID_CAP_MSR);
 
@@ -986,57 +985,79 @@ static BOOL AllocEptPageTable()
         return FALSE;
     }
 
-    PVMM_EPT_PAGE_TABLE PageTable = NULL;
-    //分配4k对齐内存
-    PHYSICAL_ADDRESS MaxPhy = { 0 };
-    MaxPhy.QuadPart = MAXULONG64;
-    PageTable = (PVMM_EPT_PAGE_TABLE)MmAllocateContiguousMemory(sizeof(VMM_EPT_PAGE_TABLE), MaxPhy);
-    if (PageTable == NULL)
-    {
-        DbgPrintEx(0, 0, "分配VMM_EPT_PAGE_TABLE内存失败\n");
+    ULONG_PTR* PDPT = 0;
+
+    ULONGLONG TotalMemoryGigaBytes = (GetPhysicalMemoryGigaBytes() + 31) & ~31; // 对32向上取整
+
+    if (TotalMemoryGigaBytes > 512) { // 内存过大
         return FALSE;
     }
 
-    RtlZeroMemory(PageTable, sizeof(VMM_EPT_PAGE_TABLE));
+    //分配总的内存，其中2代表PML4T和PDPT需要的两页内存，TotalMemoryGigaBytes是PDT(1GB)，TOTAL_MEM * 512是PT(2MB)
 
-    //设置第一个512G区域
-    PageTable->PML4T[0].WriteAccess = 1;
-    PageTable->PML4T[0].ReadAccess = 1;
-    PageTable->PML4T[0].ExecuteAccess = 1;
-    PageTable->PML4T[0].PageFrameNumber = MmGetPhysicalAddress(PageTable->PDPT).QuadPart / PAGE_SIZE;
+    SIZE_T size = (2 + 512 + TotalMemoryGigaBytes * 512) * PAGE_SIZE;
 
-    //填写1G区域
-    for (size_t i = 0; i < EPT_PDPTE_ENTRY_COUNT; i++)
-    {
-        PageTable->PDPT[i].ReadAccess = 1;
-        PageTable->PDPT[i].WriteAccess = 1;
-        PageTable->PDPT[i].ExecuteAccess = 1;
-        PageTable->PDPT[i].PageFrameNumber = MmGetPhysicalAddress(PageTable->PDT[i]).QuadPart / PAGE_SIZE;
+    PHYSICAL_ADDRESS MaxAddr = { 0 };
+    MaxAddr.QuadPart = -1;
+    EptMem = MmAllocateContiguousMemory(size, MaxAddr);
+    if (!EptMem) {
+        return FALSE;
     }
 
-    //填充2M区域
-    for (size_t i = 0; i < EPT_PDPTE_ENTRY_COUNT; i++)
-    {
+    RtlSecureZeroMemory(EptMem, size);
 
-        for (size_t j = 0; j < EPT_PDE_ENTRY_COUNT; j++)
-        {
-            PageTable->PDT[i][j].ReadAccess = 1;
-            PageTable->PDT[i][j].WriteAccess = 1;
-            PageTable->PDT[i][j].ExecuteAccess = 1;
-            PageTable->PDT[i][j].LargePage = 1;
-            PageTable->PDT[i][j].PageFrameNumber = (i * EPT_PDPTE_ENTRY_COUNT) + j;
-            //设置2M其他区域
-            EptSetPde2mEntry(&PageTable->PDT[i][j]);
-        }
-    }
+    //最后两页给PML4T和PDPT，这里类似一个每项大小为4KB的数组，第一项为(EptMem + 0 * PAGE_SIZE)
+    //最后一项为(EptMem + (1 + TotalMemoryGigaBytes + TotalMemoryGigaBytes * 512) * PAGE_SIZE)
+    SIZE_T Offset = (TotalMemoryGigaBytes + TotalMemoryGigaBytes * 512) * PAGE_SIZE;
+    eptState.PML4T = (ULONG_PTR*)(EptMem + Offset);
 
-    eptState.pEptPageTable = PageTable;
+    DbgPrintEx(0, 0, "eptState.PML4T: %p\nTotalMemoryGigaBytes: %lld\nEptMem: %p\nMemorysize: %lld\n",
+        eptState.PML4T, TotalMemoryGigaBytes, EptMem, size);
+
+    PDPT = (ULONG_PTR*)(EptMem + (1 + TotalMemoryGigaBytes + TotalMemoryGigaBytes * 512) * PAGE_SIZE);
+    DbgPrintEx(0, 0, "PDPT: %p\n", PDPT);
     
+    eptState.PML4T[0] = MmGetPhysicalAddress(PDPT).QuadPart + 7;
+    ULONG_PTR index = 0;
+    for (UINT_PTR PDPT_Index = 0; PDPT_Index < TotalMemoryGigaBytes; PDPT_Index++)
+    {
+        // 分配一页内存给PDT
+        UINT_PTR* PDT = (UINT_PTR*)(EptMem + PAGE_SIZE * index++);
+        // 初始化PDPTE
+        PDPT[PDPT_Index] = MmGetPhysicalAddress(PDT).QuadPart + 7;
+
+        for (UINT_PTR PDT_Index = 0; PDT_Index < 512; PDT_Index++)
+        {
+            // 分配一页给PT
+            UINT_PTR* PT = (UINT_PTR*)(EptMem + PAGE_SIZE * index++);
+            // 初始化PDE
+            PDT[PDT_Index] = MmGetPhysicalAddress(PT).QuadPart + 7;
+
+            for (UINT_PTR PT_Index = 0; PT_Index < 512; PT_Index++)
+            {
+                // 初始化PTE
+                PT[PT_Index] = (PDPT_Index * (1 << 30) + PDT_Index * (1 << 21) + PT_Index * (1 << 12) + 0x37);
+            }
+
+        }
+
+    }
+
+    // Intel System Program Guide 24.6.11
+    eptState.EptPointer.AsUInt = MmGetPhysicalAddress(eptState.PML4T).QuadPart + 7;
+
+    if (MSR48c & 0x4000) {
+        eptState.EptPointer.MemoryType = MEMORY_TYPE_WRITE_BACK;
+    }
+    else if (MSR48c & 0x100) {
+        eptState.EptPointer.MemoryType = MEMORY_TYPE_UNCACHEABLE;
+    }
+
     eptState.EptPointer.PageWalkLength = 3; // 4级页表(page-walk length 4)
     eptState.EptPointer.EnableAccessAndDirtyFlags = FALSE;
-    eptState.EptPointer.PageFrameNumber = MmGetPhysicalAddress(eptState.pEptPageTable->PML4T).QuadPart / PAGE_SIZE;
 
     return TRUE;
+
 }
 
 BOOL VMXStart()
@@ -1048,7 +1069,7 @@ BOOL VMXStart()
         DbgPrintEx(0, 0, "this cpu not support EPT\n");
     }
     else {
-        BOOL ret = AllocEptPageTable();
+        BOOL ret = InitEpt();
         if (ret == FALSE) {
             DbgPrintEx(0, 0, "AllocEptPageTable Failed\n");
         }
@@ -1071,7 +1092,7 @@ BOOL VMXStop()
     RemoveAllVM();
 
     if (eptState.bEptInitializeSuccess) {
-        MmFreeContiguousMemory(eptState.pEptPageTable);
+        MmFreeContiguousMemory(EptMem);
     }
 
     return TRUE;

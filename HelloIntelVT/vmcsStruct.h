@@ -1121,7 +1121,7 @@ typedef struct _MTRR_RANGE
 
 typedef struct _EPT_STATE
 {
-    PVMM_EPT_PAGE_TABLE pEptPageTable;
+    UINT_PTR* PML4T;
     EPT_POINTER EptPointer;
     BOOL bEptInitializeSuccess;
 }EPT_STATE, * PEPT_STATE;
