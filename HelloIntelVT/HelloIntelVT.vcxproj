@@ -170,17 +170,22 @@
     <FilesToPackage Include="$(TargetPath)" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="EptHook.c" />
     <ClCompile Include="HelpFunction.c" />
     <ClCompile Include="main.c" />
+    <ClCompile Include="SSDT.c" />
     <ClCompile Include="vmhandler.c" />
     <ClCompile Include="vmhelper.c" />
     <ClCompile Include="VTFunction.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="EptHook.h" />
     <ClInclude Include="HelpFunction.h" />
     <ClInclude Include="HelpStruct.h" />
     <ClInclude Include="kernelFunction.h" />
     <ClInclude Include="msrname.h" />
+    <ClInclude Include="nmd_assembly.h" />
+    <ClInclude Include="SSDT.h" />
     <ClInclude Include="vmcsStruct.h" />
     <ClInclude Include="vmhandler.h" />
     <ClInclude Include="vmhelper.h" />

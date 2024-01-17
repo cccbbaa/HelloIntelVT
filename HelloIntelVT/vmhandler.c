@@ -191,11 +191,30 @@ static void VMMvmcallHandler(PGUEST_REGS GuestRegs)
 	// rdx 'vm'
 	// r8 'off'
 	// r9 cpunr() + 1
-
-	UINT64 result = ((GuestRegs->rcx * GuestRegs->r8) ^ GuestRegs->rdx) + (GuestRegs->r9);
-
+	
 	//获取当前逻辑处理器ID
 	ULONG64 ProcessID = cpunr();
+
+	if (GuestRegs->rcx == 'hook' && GuestRegs->r8 == 0 && GuestRegs->r9 == 0)
+	{
+		PEptHookInfo hookInfo = GuestRegs->rdx;
+
+		DbgPrintEx(0, 0, "ept hook at [0x%llx]\nFakePageVaAddr: [0x%llx]\nFakePagePhyAddr: [0x%llx]\nRealPagePhyAddr: [0x%llx]",
+			hookInfo->OriginalFunAddr, hookInfo->FakePageVaAddr, hookInfo->FakePagePhyAddr, hookInfo->RealPagePhyAddr);
+
+		EptCommonEntry* pte = GetPteByPhyAddr(hookInfo->RealPagePhyAddr);
+		if (pte) {
+			pte->fields.physial_address = hookInfo->FakePagePhyAddr >> 12;
+			pte->fields.execute_access = 1;
+			pte->fields.read_access = 0;
+			pte->fields.write_access = 0;
+		}
+
+		restoreRegister[ProcessID].rax = STATUS_SUCCESS;
+		return;
+	}
+
+	UINT64 result = ((GuestRegs->rcx * GuestRegs->r8) ^ GuestRegs->rdx) + (GuestRegs->r9);
 
 	if (result == (0x2b49e3ca491c55ULL + (cpunr() + 1ULL))) // vmoff
 	{

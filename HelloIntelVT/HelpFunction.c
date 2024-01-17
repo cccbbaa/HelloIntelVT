@@ -261,3 +261,92 @@ INT GetPhysicalMemoryGigaBytes()
 
     return result;
 }
+
+#define MAX_KMALLOC_PAGE_COUNT PAGE_SIZE * 8
+#define EVERYTIME_ALLOC_SIZE PAGE_SIZE * 2
+
+PVOID allocPageAddr[MAX_KMALLOC_PAGE_COUNT] = { 0 }; // 允许使用kmalloc分配 MAX_KMALLOC_PAGE_COUNT 个内存页
+int nAllocPages = 0;
+CriticalSection cKMAllocSection = { 0 };
+
+PVOID kmalloc(ULONG_PTR size)
+{
+    if (size >= EVERYTIME_ALLOC_SIZE) {
+        DbgPrintEx(0, 0, "请求分配过大的内存\n");
+        return NULL64;
+    }
+
+    EnterCriticalSection(&cKMAllocSection, 0);
+
+    if (nAllocPages >= MAX_KMALLOC_PAGE_COUNT) // 分配的内存页已达上限
+    {
+        LeaveCriticalSection(&cKMAllocSection);
+        return NULL64;
+    }
+
+    static PBYTE pageAddr = NULL64;
+    static unsigned int offset = 0;
+
+    PHYSICAL_ADDRESS MaxAddr = { 0 };
+    MaxAddr.QuadPart = -1;
+
+    if (pageAddr == NULL64 || ((UINT64)EVERYTIME_ALLOC_SIZE - offset) <= size)
+    {
+        pageAddr = MmAllocateContiguousMemory(EVERYTIME_ALLOC_SIZE, MaxAddr);
+        if (pageAddr) {
+            allocPageAddr[nAllocPages++] = pageAddr; // 存储便于释放
+        }
+        else {
+            DbgPrintEx(0, 0, "分配内存失败\n");
+            LeaveCriticalSection(&cKMAllocSection);
+            return NULL64;
+        }
+    }
+
+    PVOID retAddr = pageAddr + offset;
+    offset = (offset + size + 7) & ~7; // 8字节对齐
+
+    LeaveCriticalSection(&cKMAllocSection);
+
+    return retAddr;
+
+}
+
+void kmDeAlloc()
+{
+    for (int i = 0; i < nAllocPages; i++)
+    {
+        if (allocPageAddr[i]) {
+            MmFreeContiguousMemory(allocPageAddr[i]);
+        }
+        
+    }
+    nAllocPages = 0;
+}
+
+extern ULONGLONG TotalMemoryGigaBytes;
+extern PBYTE EptMem;
+
+EptCommonEntry* GetPteByPhyAddr(ULONG_PTR addr)
+{
+    if (!EptMem) {
+        return NULL64;
+    }
+
+    //根据9 9 9 9 12 分页获取各个表的下标
+    ULONG_PTR PDPT_Index = (addr >> (9 + 9 + 12)) & 0x1FF;
+    ULONG_PTR PDT_Index = (addr >> (9 + 12)) & 0x1FF;
+    ULONG_PTR PT_Index = (addr >> 12) & 0x1FF;
+
+    //求得每一等分，每一等分是一个PDT+512个PT，排除后两页
+    ULONG_PTR offset = (TotalMemoryGigaBytes + TotalMemoryGigaBytes * 512) / 513;
+    //得到目标等分，第一页是PDT，不要
+    offset = offset * PDPT_Index + 1;
+    //得到对应PT
+    offset = offset + PDT_Index;
+
+    ULONG_PTR* PTE = (ULONG_PTR*)(EptMem + offset * PAGE_SIZE) + PT_Index;
+    return (EptCommonEntry*)PTE;
+
+}
+

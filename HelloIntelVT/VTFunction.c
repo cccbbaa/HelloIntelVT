@@ -9,6 +9,7 @@ CriticalSection cVTStartSection = { 0 };
 
 EPT_STATE eptState = { 0 };
 PBYTE EptMem = NULL64;
+ULONGLONG TotalMemoryGigaBytes = 0;
 
 BOOL CheckVTIsSupport()
 {
@@ -896,73 +897,6 @@ BOOL RemoveAllVM()
     return TRUE;
 }
 
-static void EptSetPde2mEntry(PVOID NewEntry)
-{
-    EPT_PDE_2MB* pPDEEntry = (EPT_PDE_2MB*)NewEntry;
-
-
-    //获取Mtrrs信息
-    IA32_MTRR_CAPABILITIES_REGISTER MtrrCapReg = { 0 };
-    MtrrCapReg.AsUInt = __readmsr(IA32_MTRR_CAPABILITIES);
-    ULONG64 MtrrRangeSize = sizeof(MTRR_RANGE) * MtrrCapReg.VariableRangeCount;
-    PMTRR_RANGE pMtrrRange = (PMTRR_RANGE)ExAllocatePoolWithTag(NonPagedPool, MtrrRangeSize, 'st');
-    if (pMtrrRange == NULL) return;
-
-    IA32_MTRR_PHYSBASE_REGISTER MtrrBase = { 0 };
-    IA32_MTRR_PHYSMASK_REGISTER MtrrMask = { 0 };
-    ULONG NumberOfBitsInMask = 0;
-    for (size_t i = 0; i < MtrrCapReg.VariableRangeCount; i++)
-    {
-        MtrrBase.AsUInt = __readmsr(IA32_MTRR_PHYSBASE0 + (i * 2));
-        MtrrMask.AsUInt = __readmsr(IA32_MTRR_PHYSMASK0 + (i * 2));
-
-        pMtrrRange[i].Valid = MtrrMask.Valid;
-        pMtrrRange[i].Type = MtrrBase.Type;
-
-        if (MtrrMask.Valid)
-        {
-            pMtrrRange[i].PhysicalAddressMin = MtrrBase.PageFrameNumber * PAGE_SIZE;
-            BitScanForward64(&NumberOfBitsInMask, MtrrMask.PageFrameNumber * PAGE_SIZE);
-            pMtrrRange[i].PhysicalAddressMax = pMtrrRange[i].PhysicalAddressMin + ((1ull << NumberOfBitsInMask) - 1);
-        }
-    }
-
-    //获取大页面地址
-    ULONG64 LargePageAddress = pPDEEntry->PageFrameNumber * SIZE_2M;
-
-    //设置默认属性为WB
-    ULONG64 MemoryType = MEMORY_TYPE_WRITE_BACK;
-
-    //为0的条目设置UC
-    if (LargePageAddress == 0)
-    {
-        MemoryType = MEMORY_TYPE_UNCACHEABLE;
-    }
-
-    for (size_t i = 0; i < MtrrCapReg.VariableRangeCount; i++)
-    {
-        //UC为最高优先级
-        if (MemoryType == MEMORY_TYPE_UNCACHEABLE) break;
-        //检查是否在可变区域范围
-        if (LargePageAddress < pMtrrRange[i].PhysicalAddressMin) continue;
-        if (LargePageAddress > pMtrrRange[i].PhysicalAddressMax) continue;
-
-        if (MemoryType == MEMORY_TYPE_WRITE_THROUGH || pMtrrRange[i].Type == MEMORY_TYPE_WRITE_THROUGH)
-        {
-            if (MemoryType == MEMORY_TYPE_WRITE_BACK)
-            {
-                MemoryType = MEMORY_TYPE_WRITE_THROUGH;
-            }
-        }
-        else
-        {
-            MemoryType = pMtrrRange[i].Type;
-        }
-    }
-
-    pPDEEntry->MemoryType = MemoryType;
-    ExFreePoolWithTag(pMtrrRange, 'st');
-}
 
 static BOOL InitEpt()
 {
@@ -987,7 +921,7 @@ static BOOL InitEpt()
 
     ULONG_PTR* PDPT = 0;
 
-    ULONGLONG TotalMemoryGigaBytes = (GetPhysicalMemoryGigaBytes() + 31) & ~31; // 对32向上取整
+    TotalMemoryGigaBytes = (GetPhysicalMemoryGigaBytes() + 31) & ~31; // 对32向上取整
 
     if (TotalMemoryGigaBytes > 512) { // 内存过大
         return FALSE;

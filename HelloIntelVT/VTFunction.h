@@ -51,6 +51,7 @@ typedef union
 }_CR4;
 
 extern VMState vmState[MAX_CPU_COUNT];
+extern ULONGLONG TotalMemoryGigaBytes;
 
 // should called by VTStart
 BOOL CheckVTIsSupport();

@@ -1094,3 +1094,30 @@ typedef volatile struct _criticalSection
     char* name;
     int debuglevel;
 } CriticalSection, * pCriticalSection;
+
+typedef union _EptCommonEntry {
+    ULONG64 all;
+    struct {
+        ULONG64 read_access : 1;       //!< [0]
+        ULONG64 write_access : 1;      //!< [1]
+        ULONG64 execute_access : 1;    //!< [2]
+        ULONG64 memory_type : 3;       //!< [3:5]
+        ULONG64 reserved1 : 6;         //!< [6:11]
+        ULONG64 physial_address : 36;  //!< [12:48-1]
+        ULONG64 reserved2 : 16;        //!< [48:63]
+    } fields;
+}EptCommonEntry;
+
+//用于保存HOOK信息的双向链表
+typedef struct _EptHookInfo
+{
+    ULONG_PTR RealPagePhyAddr;
+
+    ULONG_PTR FakePagePhyAddr;
+    ULONG_PTR FakePageVaAddr;
+
+    ULONG_PTR OriginalFunAddr;
+    ULONG_PTR OriginalFunHeadCode;
+
+    LIST_ENTRY list;
+} EptHookInfo, * PEptHookInfo;

@@ -55,3 +55,10 @@ BOOLEAN LeaveCriticalSection(pCriticalSection CS);
 
 // 获取物理内存大小，按GB大小返回(向上取整)
 INT GetPhysicalMemoryGigaBytes();
+
+PVOID kmalloc(ULONG_PTR size);
+
+void kmDeAlloc();
+
+// 通过物理地址获取对应的PTE
+EptCommonEntry* GetPteByPhyAddr(ULONG_PTR addr);

@@ -29,6 +29,15 @@
     <Filter Include="vmhandler">
       <UniqueIdentifier>{5453aa90-3f53-4f89-beaf-0009eb517563}</UniqueIdentifier>
     </Filter>
+    <Filter Include="EptHook">
+      <UniqueIdentifier>{90cf9888-2b28-4828-a02c-55b4dab3f5f5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="lib">
+      <UniqueIdentifier>{37884384-35e2-4c1b-a2ea-88fa2b63fa99}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="SSDT">
+      <UniqueIdentifier>{78e2d02f-c001-4418-820e-8f08df70e451}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <Inf Include="HelloIntelVT.inf">
@@ -50,6 +59,12 @@
     </ClCompile>
     <ClCompile Include="vmhandler.c">
       <Filter>vmhandler</Filter>
+    </ClCompile>
+    <ClCompile Include="EptHook.c">
+      <Filter>EptHook</Filter>
+    </ClCompile>
+    <ClCompile Include="SSDT.c">
+      <Filter>SSDT</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -79,6 +94,15 @@
     </ClInclude>
     <ClInclude Include="HelpStruct.h">
       <Filter>Helper</Filter>
+    </ClInclude>
+    <ClInclude Include="EptHook.h">
+      <Filter>EptHook</Filter>
+    </ClInclude>
+    <ClInclude Include="nmd_assembly.h">
+      <Filter>lib</Filter>
+    </ClInclude>
+    <ClInclude Include="SSDT.h">
+      <Filter>SSDT</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
