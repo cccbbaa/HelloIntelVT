@@ -1121,3 +1121,28 @@ typedef struct _EptHookInfo
 
     LIST_ENTRY list;
 } EptHookInfo, * PEptHookInfo;
+
+typedef struct _exit_qualification_ept_violation
+{
+    union
+    {
+        UINT64 flags;
+
+        struct
+        {
+            UINT64 data_read : 1;
+            UINT64 data_write : 1;
+            UINT64 data_execute : 1;
+            UINT64 entry_read : 1;
+            UINT64 entry_write : 1;
+            UINT64 entry_execute : 1;
+            UINT64 entry_execute_for_user_mode : 1;
+            UINT64 valid_guest_linear_address : 1;
+            UINT64 ept_translated_access : 1;
+            UINT64 user_mode_linear_address : 1;
+            UINT64 readable_writable_page : 1;
+            UINT64 execute_disable_page : 1;
+            UINT64 nmi_unblocking : 1;
+        };
+    };
+}ExitQualificationEpt;

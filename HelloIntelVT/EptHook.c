@@ -34,7 +34,7 @@ static PEptHookInfo GetHookInfoByVirtualAddr(PVOID Func)
     for (PLIST_ENTRY pListEntry = HidePageEntry.list.Flink; pListEntry != &HidePageEntry.list; pListEntry = pListEntry->Flink)
     {
         PEptHookInfo pEntry = CONTAINING_RECORD(pListEntry, EptHookInfo, list);
-        if (Func == pEntry->OriginalFunAddr && Func) {
+        if (((ULONG_PTR)Func == pEntry->OriginalFunAddr) && Func) {
             return pEntry;
         }
     }
@@ -56,8 +56,8 @@ PVOID EptHook(PVOID TargetFunc, PVOID DetourFunc)
         return NULL;
     }
 
-    ((PUINT64)(JmpFakeAddr + 2))[0] = DetourFunc;
-    
+    ((PUINT64)(JmpFakeAddr + 2))[0] = (UINT64)DetourFunc;
+
     // 跳回原函数
     UINT_PTR WriteLen = GetAsmCodeLen(TargetFunc, sizeof(JmpFakeAddr));
     UINT_PTR JmpOriginalAddr = (UINT64)TargetFunc + WriteLen;
@@ -84,10 +84,10 @@ PVOID EptHook(PVOID TargetFunc, PVOID DetourFunc)
 
     // 填写HOOK信息
     PEptHookInfo hidePage = (PEptHookInfo)kmalloc(sizeof(EptHookInfo));
-    hidePage->FakePageVaAddr = fakePage;
+    hidePage->FakePageVaAddr = (ULONG_PTR)fakePage;
     hidePage->FakePagePhyAddr = MmGetPhysicalAddress((PVOID)fakePage).QuadPart & 0xFFFFFFFFFFFFF000;
     hidePage->RealPagePhyAddr = MmGetPhysicalAddress((PVOID)((UINT_PTR)TargetFunc & 0xFFFFFFFFFFFFF000)).QuadPart;
-    hidePage->OriginalFunAddr = TargetFunc;
+    hidePage->OriginalFunAddr = (ULONG_PTR)TargetFunc;
     hidePage->OriginalFunHeadCode = (ULONG_PTR)OriginalFunHeadCode;
 
     //插入链表
@@ -96,4 +96,35 @@ PVOID EptHook(PVOID TargetFunc, PVOID DetourFunc)
     DoVmCall('hook', (ULONG_PTR)hidePage, 0, 0);
 
     return OriginalFunHeadCode;
+}
+
+PEptHookInfo GetHookInfoByPA(ULONG_PTR physAddr)
+{
+    if (HidePageEntry.list.Flink == NULL || IsListEmpty(&HidePageEntry.list))
+        return NULL;
+
+    physAddr &= 0xFFFFFFFFFFFFF000;
+
+    for (PLIST_ENTRY pListEntry = HidePageEntry.list.Flink; pListEntry != &HidePageEntry.list; pListEntry = pListEntry->Flink)
+    {
+        PEptHookInfo pEntry = CONTAINING_RECORD(pListEntry, EptHookInfo, list);
+        if (physAddr == pEntry->FakePagePhyAddr || physAddr == pEntry->RealPagePhyAddr) {
+            return pEntry;
+        }
+    }
+    return NULL;
+}
+
+PEptHookInfo GetHookInfoByVA(ULONG_PTR vaAddr)
+{
+    if (HidePageEntry.list.Flink == NULL || IsListEmpty(&HidePageEntry.list))
+        return NULL;
+
+    for (PLIST_ENTRY pListEntry = HidePageEntry.list.Flink; pListEntry != &HidePageEntry.list; pListEntry = pListEntry->Flink)
+    {
+        PEptHookInfo pEntry = CONTAINING_RECORD(pListEntry, EptHookInfo, list);
+        if ((PAGE_ALIGN(vaAddr) == PAGE_ALIGN(pEntry->OriginalFunAddr)) && vaAddr)
+            return pEntry;
+    }
+    return NULL;
 }

@@ -5,6 +5,8 @@
 #include "msrname.h"
 #include "VTFunction.h"
 
+#include "EptHook.h"
+
 Register restoreRegister[MAX_CPU_COUNT] = { 0 };
 
 static void VMMcpuidHandler(PGUEST_REGS GuestRegs)
@@ -118,7 +120,7 @@ static void VMMaccessCrHandler(PGUEST_REGS GuestRegs)
 		    // 由于使用了VPID标签而失效，因此vm-exit不会正常（自动）刷新tlb，我们必须手动执行
 		    //
 			// 调用使单个Vpid失效 因为我们设置默认VPID为1了
-			VMMinvvpid(InvvpidSingleContext, 1, NULL);
+			VMMinvvpid(InvvpidSingleContext, 1, 0);
 
 			
 			break;
@@ -197,17 +199,27 @@ static void VMMvmcallHandler(PGUEST_REGS GuestRegs)
 
 	if (GuestRegs->rcx == 'hook' && GuestRegs->r8 == 0 && GuestRegs->r9 == 0)
 	{
-		PEptHookInfo hookInfo = GuestRegs->rdx;
+		if ((__readmsr(IA32_VMX_EPT_VPID_CAP_MSR) % 2) == 0) { // 第0位为0则不支持EPT使用可执行但是不可读不可写的内存
+			restoreRegister[ProcessID].rax = STATUS_UNSUCCESSFUL;
+			DbgPrintEx(0, 0, "this cpu not support only execute memory\n");
+			return;
+		}
 
-		DbgPrintEx(0, 0, "ept hook at [0x%llx]\nFakePageVaAddr: [0x%llx]\nFakePagePhyAddr: [0x%llx]\nRealPagePhyAddr: [0x%llx]",
+		PEptHookInfo hookInfo = (PEptHookInfo)GuestRegs->rdx;
+
+		DbgPrintEx(0, 0, "ept hook at [0x%llx]\nFakePageVaAddr: [0x%llx]\nFakePagePhyAddr: [0x%llx]\nRealPagePhyAddr: [0x%llx]\n",
 			hookInfo->OriginalFunAddr, hookInfo->FakePageVaAddr, hookInfo->FakePagePhyAddr, hookInfo->RealPagePhyAddr);
 
 		EptCommonEntry* pte = GetPteByPhyAddr(hookInfo->RealPagePhyAddr);
 		if (pte) {
+			DbgPrintEx(0, 0, "pte: %p\n", pte);
 			pte->fields.physial_address = hookInfo->FakePagePhyAddr >> 12;
 			pte->fields.execute_access = 1;
 			pte->fields.read_access = 0;
 			pte->fields.write_access = 0;
+		}
+		else {
+			SetBreakPointEx();
 		}
 
 		restoreRegister[ProcessID].rax = STATUS_SUCCESS;
@@ -311,7 +323,7 @@ static void VMMvmcallHandler(PGUEST_REGS GuestRegs)
 
 		//调用VmxClear 并关闭虚拟机
 
-		UCHAR Result = __vmx_vmclear(&(vmState[ProcessID].pVMCSRegion_PA));
+		UCHAR Result = __vmx_vmclear((PUINT64)&(vmState[ProcessID].pVMCSRegion_PA));
 
 		//清理成功就调用VmOff并设置标志位
 		if (Result == 0)
@@ -346,6 +358,84 @@ void VmxVmresume()
 	DbgPrint("Error Vmresume Code : %llx\n", ErrorCode);
 
 	__debugbreak();
+}
+
+static void VMMeptViolationHandler(UINT64 GuestRip)
+{
+	//获取触发EptViolation的物理地址
+	ULONG_PTR GuestPhyAddr = 0;
+	ExitQualificationEpt ExitQualification = { 0 };
+
+	__vmx_vmread(vm_guest_physical_address, &GuestPhyAddr);
+	__vmx_vmread(vm_exit_qualification, &(ExitQualification.flags));
+
+	PEptHookInfo hookInfo = GetHookInfoByPA(GuestPhyAddr);
+
+	if (!hookInfo) {
+		hookInfo = GetHookInfoByVA(GuestRip);
+	}
+
+	if (hookInfo)
+	{
+		EptCommonEntry* pte = GetPteByPhyAddr(GuestPhyAddr);
+
+		DbgPrintEx(0, 0, "-----------------------------------\nEptViolation at virtual address %llx\nEptViolation at physical address %llx\nFakePagePhyAddr: %llx\nFakePageVaAddr: %llx\nOriginalFunAddr: %llx\nOriginalFunHeadCode: %llx\nRealPagePhyAddr: %llx\nexecute_access: %lld\n",
+			GuestRip, GuestPhyAddr, hookInfo->FakePagePhyAddr, hookInfo->FakePageVaAddr, hookInfo->OriginalFunAddr, hookInfo->OriginalFunHeadCode, hookInfo->RealPagePhyAddr, pte->fields.execute_access);
+
+		DbgPrintEx(0, 0,
+			"data_read: %lld\n"
+			"data_write: %lld\n"
+			"data_execute: %lld\n"
+			"entry_read: %lld\n"
+			"entry_write: %lld\n"
+			"entry_execute: %lld\n"
+			"entry_execute_for_user_mode: %lld\n"
+			"valid_guest_linear_address: %lld\n"
+			"ept_translated_access: %lld\n"
+			"user_mode_linear_address: %lld\n"
+			"readable_writable_page: %lld\n"
+			"execute_disable_page: %lld\n"
+			"nmi_unblocking: %lld\n",
+			ExitQualification.data_read,
+			ExitQualification.data_write,
+			ExitQualification.data_execute,
+			ExitQualification.entry_read,
+			ExitQualification.entry_write,
+			ExitQualification.entry_execute,
+			ExitQualification.entry_execute_for_user_mode,
+			ExitQualification.valid_guest_linear_address,
+			ExitQualification.ept_translated_access,
+			ExitQualification.user_mode_linear_address,
+			ExitQualification.readable_writable_page,
+			ExitQualification.execute_disable_page,
+			ExitQualification.nmi_unblocking);
+		DbgPrintEx(0, 0, "-----------------------------------\n");
+
+		/*if (ExitQualification.data_read || ExitQualification.data_write) {
+			SetBreakPointEx();
+		}*/
+		
+
+		//如果触发EptViolation时，当前页是能执行，而这里只有两种情况，要么能执行不能读写，要么能读写不能执行
+		//能执行说明它是读或写只能执行的页面而触发了EptViolation，让它读写原函数页
+		if (pte->fields.execute_access && (ExitQualification.data_read || ExitQualification.data_write)) {
+			pte->fields.execute_access = 0;
+			pte->fields.read_access = 1;
+			pte->fields.write_access = 1;
+			pte->fields.physial_address = hookInfo->RealPagePhyAddr >> 12;
+		}
+		else {
+			//如果触发EptViolation时，当前页是可读可写，说明它是执行触发了EptViolation，让它执行HOOK函数页
+			pte->fields.execute_access = 1;
+			pte->fields.read_access = 0;
+			pte->fields.write_access = 0;
+			pte->fields.physial_address = hookInfo->FakePagePhyAddr >> 12;
+		}
+
+	}
+	else {
+		SetBreakPointEx();
+	}
 }
 
 PVOID CVMMEntryPoint(PGUEST_REGS pGuestRegs)
@@ -411,6 +501,10 @@ PVOID CVMMEntryPoint(PGUEST_REGS pGuestRegs)
 
 		}
 	}
+	case 2: // TripleFault 三重错误
+		DbgPrintEx(0, 0, "TripleFault at 0x%llx\n", GuestRip);
+		SetBreakPointEx();
+		break;
 	case 8: // NMI window
 		break;
 	case 10: // CPUID
@@ -438,6 +532,9 @@ PVOID CVMMEntryPoint(PGUEST_REGS pGuestRegs)
 	case 32: // WRMSR
 		// SetBreakPointEx();
 		VMMwrmsrHandler(pGuestRegs);
+		break;
+	case 48: // EptViolation
+		VMMeptViolationHandler(GuestRip);
 		break;
 	case 55: // xsetbv
 		VMMxsetbvHandler(pGuestRegs);
@@ -475,7 +572,9 @@ PVOID CVMMEntryPoint(PGUEST_REGS pGuestRegs)
 
 	// DbgPrintEx(0, 0, "------Test------\nvm_exit_reason: 0x%llx\nvm_exit_instructionlength: %lld\nvm_guest_rsp: 0x%llx\nvm_guest_rip: 0x%llx\nvm_guest_rflags: 0x%llx\n------Test------\n", ExitReason, ExitInstructionLength, GuestRsp, GuestRip, GuestRflags);
 	// SetBreakPointEx();
-	GuestRip += ExitInstructionLength;
+	if (ExitReason != 48) {
+		GuestRip += ExitInstructionLength;
+	}
 
 	UCHAR Ret = __vmx_vmwrite(vm_guest_rip, GuestRip);
 	if (Ret != 0) {

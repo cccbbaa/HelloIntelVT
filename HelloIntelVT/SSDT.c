@@ -240,7 +240,7 @@ UINT_PTR FindSSDTFunctionByIndex(DWORD index)
 
 	if ((*address == 0x4c) && (*(address + 1) == 0x8d) && (*(address + 2) == 0x15))
 	{
-		DbgPrintEx(0, 0, "Address: [%p]\r\n", address);
+		// DbgPrintEx(0, 0, "Address: [%p]\r\n", address);
 		jmpoffset = *(PLONG)(address + 3);
 	}
 

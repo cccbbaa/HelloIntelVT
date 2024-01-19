@@ -23,7 +23,7 @@ NTSTATUS MyNtOpenProcess(
 	PCLIENT_ID         ClientId
 )
 {
-	if ((index % 100) == 0) {
+	if ((index % 300) == 0) {
 		DbgPrintEx(0, 0, "HOOK NtOpenProcess 调用次数: %d\n", index);
 	}
 	index++;
@@ -58,7 +58,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT pDriver, PUNICODE_STRING pRegPath)
 	VMMCreate();
 
 	LONG Index = AsdGetSSDTFunIndex("NtOpenProcess");
-	DbgPrintEx(0, 0, "NtTerminateProcess Index: %d\n", Index);
+	// DbgPrintEx(0, 0, "NtTerminateProcess Index: %d\n", Index);
 	PVOID FuncAddr = (PVOID)FindSSDTFunctionByIndex(Index);
 	DbgPrintEx(0, 0, "FuncAddr %p\n", FuncAddr);
 

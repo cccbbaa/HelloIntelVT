@@ -123,7 +123,7 @@ BOOL CreateVirtualMachine(UINT64 guestStack)
     vmState[cpuNumber].pVMCSRegion_PA = MmGetPhysicalAddress(vmState[cpuNumber].pVMCSRegion);
 
     // 初始化指定的VMCS，并将其启动状态设置为 Clear
-    UCHAR Ret = __vmx_vmclear(&vmState[cpuNumber].pVMCSRegion_PA);
+    UCHAR Ret = __vmx_vmclear((PUINT64)&vmState[cpuNumber].pVMCSRegion_PA);
     if (Ret != 0) {
         if (Ret == 1) {
             DbgPrintEx(0, 0, "vmclear Error, %s\n", getVMInstructionErrorString());
@@ -136,7 +136,7 @@ BOOL CreateVirtualMachine(UINT64 guestStack)
     }
 
     // 从指定地址加载指向当前 VMCS 的指针
-    Ret = __vmx_vmptrld(&vmState[cpuNumber].pVMCSRegion_PA);
+    Ret = __vmx_vmptrld((PUINT64)&vmState[cpuNumber].pVMCSRegion_PA);
     if (Ret != 0) {
         if (Ret == 1) {
             DbgPrintEx(0, 0, "vmptrld Error, %s\n", getVMInstructionErrorString());
@@ -1102,7 +1102,7 @@ BOOL VTStart()
 
     vmState[cpuNumber].pVMXRegion_PA = MmGetPhysicalAddress(vmState[cpuNumber].pVMXRegion);
     
-    char RetVMXON = __vmx_on(&vmState[cpuNumber].pVMXRegion_PA);
+    char RetVMXON = __vmx_on((PUINT64)&vmState[cpuNumber].pVMXRegion_PA);
     if (RetVMXON != 0) {
         if (RetVMXON == 1) {
             DbgPrintEx(0, 0, "VMXON Error, %s", getVMInstructionErrorString());
