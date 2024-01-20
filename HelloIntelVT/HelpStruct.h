@@ -1122,6 +1122,15 @@ typedef struct _EptHookInfo
     LIST_ENTRY list;
 } EptHookInfo, * PEptHookInfo;
 
+typedef struct _speedHackInformation
+{
+    BOOL bUseSpeedHack;
+    UINT64 InitalTime;
+    double SpeedMult;
+    UINT64 InitalOffset;
+    volatile UINT64 lowestTSC;
+}speedHackInfor;
+
 typedef struct _exit_qualification_ept_violation
 {
     union
