@@ -9,6 +9,7 @@
 
 Register restoreRegister[MAX_CPU_COUNT] = { 0 };
 speedHackInfor sphInfor = { 0 };
+UINT64 CountTime = 0;
 
 static void VMMcpuidHandler(PGUEST_REGS GuestRegs)
 {
@@ -20,7 +21,7 @@ static void VMMcpuidHandler(PGUEST_REGS GuestRegs)
 		GuestRegs->rdx = 0x22334455;
 		return;
 	}
-	// SetBreakPointEx();
+
 	int cpuInfo[4] = { 0 };
 	int function_id = GuestRegs->rax & 0xffffffff;
 	int subfunction_id = GuestRegs->rcx & 0xffffffff;
@@ -39,7 +40,34 @@ static void VMMcpuidHandler(PGUEST_REGS GuestRegs)
 
 static void VMMrdtscHandler(PGUEST_REGS GuestRegs)
 {
+	UINT64 time;
 	UINT64 realtime = __rdtsc();
+
+	// SetBreakPointEx();
+
+	if (sphInfor.bUseSpeedHack) {
+		time = (realtime - sphInfor.InitalTime) * sphInfor.SpeedMult + sphInfor.InitalOffset;
+
+		if (CountTime++ % 100000 == 0) {
+			DbgPrintEx(0, 0, "time: %llx\n", time);
+		}
+
+	}
+	else time = realtime;
+	
+	GuestRegs->rax = time & 0xffffffff;
+	GuestRegs->rdx = time >> 32;
+
+	if (sphInfor.lowestTSC < time) {
+		sphInfor.lowestTSC = time;
+	}
+
+	RFLAGS flags;
+	__vmx_vmread(vm_guest_rflags, &flags.AsUInt);
+
+	if (flags.TrapFlag == 1)
+		__vmx_vmwrite(vm_pending_debug_exceptions, 0x4000);
+
 }
 
 static void VMMrdmsrHandler(PGUEST_REGS GuestRegs)
@@ -323,6 +351,65 @@ static void VMMteardown(PGUEST_REGS GuestRegs, ULONG64 ProcessorID)
 	}
 }
 
+static void VMMhookFunction(PGUEST_REGS GuestRegs, ULONG64 ProcessorID)
+{
+	if ((__readmsr(IA32_VMX_EPT_VPID_CAP_MSR) % 2) == 0) { // 第0位为0则不支持EPT使用可执行但是不可读不可写的内存
+		restoreRegister[ProcessorID].rax = STATUS_UNSUCCESSFUL;
+		DbgPrintEx(0, 0, "this cpu not support only execute memory\n");
+		return;
+	}
+
+	PEptHookInfo hookInfo = (PEptHookInfo)GuestRegs->rdx;
+
+	DbgPrintEx(0, 0, "ept hook at [0x%llx]\nFakePageVaAddr: [0x%llx]\nFakePagePhyAddr: [0x%llx]\nRealPagePhyAddr: [0x%llx]\n",
+		hookInfo->OriginalFunAddr, hookInfo->FakePageVaAddr, hookInfo->FakePagePhyAddr, hookInfo->RealPagePhyAddr);
+
+	EptCommonEntry* pte = GetPteByPhyAddr(hookInfo->RealPagePhyAddr);
+	if (pte) {
+		DbgPrintEx(0, 0, "pte: %p\n", pte);
+		pte->fields.physial_address = hookInfo->FakePagePhyAddr >> 12;
+		pte->fields.execute_access = 1;
+		pte->fields.read_access = 0;
+		pte->fields.write_access = 0;
+	}
+	else {
+		SetBreakPointEx();
+	}
+
+	restoreRegister[ProcessorID].rax = STATUS_SUCCESS;
+}
+
+static void VMMspeedhack(PGUEST_REGS GuestRegs, ULONG64 ProcessorID)
+{
+	if (!sphInfor.bPossibleToOpen || GuestRegs->r8 != 0 || GuestRegs->r9 != 0)
+	{
+		restoreRegister[ProcessorID].rax = STATUS_UNSUCCESSFUL;
+		return;
+	}
+
+	UINT64 currentTime = __rdtsc();
+
+	// SetBreakPointEx();
+
+	UINT64 initialoffset = (currentTime - sphInfor.InitalTime) * sphInfor.SpeedMult + sphInfor.InitalOffset;
+
+	sphInfor.InitalTime = currentTime;
+
+	if (initialoffset < sphInfor.lowestTSC) {
+		initialoffset = sphInfor.lowestTSC + 1000;
+	}
+
+	sphInfor.lowestTSC = initialoffset;
+	sphInfor.InitalOffset = initialoffset;
+	sphInfor.SpeedMult = GuestRegs->rdx;
+
+	sphInfor.bUseSpeedHack = TRUE;
+
+	// __writemsr(0x40000021, 0xC000);
+	__writemsr(0x400000B2, 0x1D1A); 
+	__writemsr(0x400000B3, 0x2710);
+}
+
 static void VMMvmcallHandler(PGUEST_REGS GuestRegs)
 {
 	//获取当前逻辑处理器ID
@@ -334,32 +421,15 @@ static void VMMvmcallHandler(PGUEST_REGS GuestRegs)
 	{
 		if (GuestRegs->r8 == 0 && GuestRegs->r9 == 0)
 		{
-			if ((__readmsr(IA32_VMX_EPT_VPID_CAP_MSR) % 2) == 0) { // 第0位为0则不支持EPT使用可执行但是不可读不可写的内存
-				restoreRegister[ProcessorID].rax = STATUS_UNSUCCESSFUL;
-				DbgPrintEx(0, 0, "this cpu not support only execute memory\n");
-				return;
-			}
-
-			PEptHookInfo hookInfo = (PEptHookInfo)GuestRegs->rdx;
-
-			DbgPrintEx(0, 0, "ept hook at [0x%llx]\nFakePageVaAddr: [0x%llx]\nFakePagePhyAddr: [0x%llx]\nRealPagePhyAddr: [0x%llx]\n",
-				hookInfo->OriginalFunAddr, hookInfo->FakePageVaAddr, hookInfo->FakePagePhyAddr, hookInfo->RealPagePhyAddr);
-
-			EptCommonEntry* pte = GetPteByPhyAddr(hookInfo->RealPagePhyAddr);
-			if (pte) {
-				DbgPrintEx(0, 0, "pte: %p\n", pte);
-				pte->fields.physial_address = hookInfo->FakePagePhyAddr >> 12;
-				pte->fields.execute_access = 1;
-				pte->fields.read_access = 0;
-				pte->fields.write_access = 0;
-			}
-			else {
-				SetBreakPointEx();
-			}
-
-			restoreRegister[ProcessorID].rax = STATUS_SUCCESS;
+			VMMhookFunction(GuestRegs, ProcessorID);
 			return;
 		}
+	}
+		break;
+	case 'sphk':
+	{
+		VMMspeedhack(GuestRegs, ProcessorID);
+		return;
 	}
 		break;
 	default:
@@ -564,15 +634,19 @@ PVOID CVMMEntryPoint(PGUEST_REGS pGuestRegs)
 		VMMaccessCrHandler(pGuestRegs);
 		break;
 	case 31: // RDMSR
-		// SetBreakPointEx();
 		VMMrdmsrHandler(pGuestRegs);
 		break;
 	case 32: // WRMSR
-		// SetBreakPointEx();
 		VMMwrmsrHandler(pGuestRegs);
 		break;
 	case 48: // EptViolation
 		VMMeptViolationHandler(GuestRip);
+		break;
+	case 51: // rdtscp
+	{
+		VMMrdtscHandler(pGuestRegs);
+		pGuestRegs->rcx = __readmsr(IA32_TSC_AUX_MSR);
+	}
 		break;
 	case 55: // xsetbv
 		VMMxsetbvHandler(pGuestRegs);
@@ -609,7 +683,7 @@ PVOID CVMMEntryPoint(PGUEST_REGS pGuestRegs)
 	}
 
 	// DbgPrintEx(0, 0, "------Test------\nvm_exit_reason: 0x%llx\nvm_exit_instructionlength: %lld\nvm_guest_rsp: 0x%llx\nvm_guest_rip: 0x%llx\nvm_guest_rflags: 0x%llx\n------Test------\n", ExitReason, ExitInstructionLength, GuestRsp, GuestRip, GuestRflags);
-	// SetBreakPointEx();
+
 	if (ExitReason != 48) {
 		GuestRip += ExitInstructionLength;
 	}

@@ -208,7 +208,6 @@ UINT_PTR GetKernelModuleBase(PULONG pimagesize, PWCHAR modulename)
 }
 
 UINT_PTR FindSSDTFunctionByIndex(DWORD index)
-
 {
 	ULONG_PTR uret = 0;
 	PUCHAR kernelbase = NULL;

@@ -1124,9 +1124,10 @@ typedef struct _EptHookInfo
 
 typedef struct _speedHackInformation
 {
+    BOOL bPossibleToOpen;
     BOOL bUseSpeedHack;
     UINT64 InitalTime;
-    double SpeedMult;
+    UINT64 SpeedMult;
     UINT64 InitalOffset;
     volatile UINT64 lowestTSC;
 }speedHackInfor;

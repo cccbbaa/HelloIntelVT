@@ -1,6 +1,7 @@
 #include "VTFunction.h"
 #include "SSDT.h"
 #include "EptHook.h"
+#include "SpeedHack.h"
 
 HANDLE hThreadCreateVM;
 
@@ -57,12 +58,13 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT pDriver, PUNICODE_STRING pRegPath)
 
 	VMMCreate();
 
-	LONG Index = AsdGetSSDTFunIndex("NtOpenProcess");
-	// DbgPrintEx(0, 0, "NtTerminateProcess Index: %d\n", Index);
-	PVOID FuncAddr = (PVOID)FindSSDTFunctionByIndex(Index);
-	DbgPrintEx(0, 0, "FuncAddr %p\n", FuncAddr);
+	//LONG Index = AsdGetSSDTFunIndex("NtOpenProcess");
+	//PVOID FuncAddr = (PVOID)FindSSDTFunctionByIndex(Index);
+	//DbgPrintEx(0, 0, "FuncAddr %p\n", FuncAddr);
 
-	OriginalNtOpenProcess = (pNtOpenProcess)EptHook(FuncAddr, MyNtOpenProcess);
+	// OriginalNtOpenProcess = (pNtOpenProcess)EptHook(FuncAddr, MyNtOpenProcess);
+
+	StartSpeedHack(10);
 
 	return STATUS_SUCCESS;
 }

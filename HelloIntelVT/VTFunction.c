@@ -10,6 +10,8 @@ CriticalSection cVTStartSection = { 0 };
 EPT_STATE eptState = { 0 };
 PBYTE EptMem = NULL64;
 ULONGLONG TotalMemoryGigaBytes = 0;
+extern speedHackInfor sphInfor;
+
 
 BOOL CheckVTIsSupport()
 {
@@ -589,7 +591,8 @@ BOOL InitializeVMCS(int cpuNumber, UINT64 guestStack)
         //ppbVMEC.CR3LoadExiting = 1;
         //ppbVMEC.CR3StoreExiting = 1;
         ppbVMEC.UseMSRBitmaps = 1;
-        
+        ppbVMEC.RDTSCExiting = 1;
+
         BOOLEAN bHasSecondaryProcBasedCTLS = FALSE;
         // Intel手册第三卷 A.3.2 
         // 如果IA32_VMX_BASIC MSR的位55读为0，则所有有关基于处理器的主要VM执行控制的允许设置信息都包含在IA32_VMX_PROCBASED_CTLS MSR中。
@@ -608,6 +611,14 @@ BOOL InitializeVMCS(int cpuNumber, UINT64 guestStack)
                 ppbVMEC.ActivateSecondaryControls = 1;
             }
         }
+
+        if (ppbVMEC.RDTSCExiting == 1) {
+            DbgPrintEx(0, 0, "rdtsc hooking is possible\n");
+            sphInfor.bPossibleToOpen = TRUE;
+            sphInfor.SpeedMult = 1;
+            sphInfor.lowestTSC = __rdtsc();
+        }
+
         Ret = __vmx_vmwrite(vm_execution_controls_cpu, ppbVMEC.Value);
         if (Ret != 0) {
             goto InitVMCSfailed;
